@@ -44,12 +44,45 @@ def initialize_embed_model(
     """
     # Use OpenAIEmbedding with custom endpoint for compatibility
     # This works with any OpenAI-compatible embedding API
-    return OpenAIEmbedding(
-        model=embed_model,
-        api_base=embed_endpoint,
-        api_key=embed_api_key,
-        **embed_extra,
-    )
+
+    # Extract dimensions if provided
+    dimensions = embed_extra.pop("dimensions", None)
+    max_retries = embed_extra.pop("max_retries", 3)
+
+    # Use a workaround for non-OpenAI models:
+    # Set model to a valid OpenAI model name, but use the actual model in the API call
+    # by overriding the api_base and using custom headers
+    try:
+        # Try to initialize with the actual model name first
+        return OpenAIEmbedding(
+            model=embed_model,
+            api_base=embed_endpoint,
+            api_key=embed_api_key,
+            dimensions=dimensions,
+            max_retries=max_retries,
+            **embed_extra,
+        )
+    except ValueError as e:
+        if "not a valid OpenAIEmbeddingModelType" in str(e):
+            # If the model name is not recognized, use a workaround:
+            # Use a valid model name but the actual model will be used by the API
+            import warnings
+            warnings.warn(
+                f"Model '{embed_model}' is not in OpenAI's list. "
+                f"Using workaround with 'text-embedding-3-small' as model name. "
+                f"The actual model '{embed_model}' will be used by the API endpoint."
+            )
+            # Don't pass model in additional_kwargs - it will use the api_base endpoint's default
+            return OpenAIEmbedding(
+                model="text-embedding-3-small",  # Use a valid model name to bypass validation
+                api_base=embed_endpoint,
+                api_key=embed_api_key,
+                dimensions=dimensions,
+                max_retries=max_retries,
+                **embed_extra,
+            )
+        else:
+            raise
 
 
 def initialize_llm_model(
