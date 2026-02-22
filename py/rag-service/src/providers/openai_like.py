@@ -45,13 +45,20 @@ def initialize_embed_model(
     # Use OpenAIEmbedding with custom endpoint for compatibility
     # This works with any OpenAI-compatible embedding API
 
-    # Extract dimensions if provided
+    # Extract known parameters to avoid conflicts
     dimensions = embed_extra.pop("dimensions", None)
     max_retries = embed_extra.pop("max_retries", 3)
 
+    # Remove any conflicting keys that might be in embed_extra
+    conflicting_keys = ["model", "model_name", "api_base", "api_key", "base_url"]
+    for key in conflicting_keys:
+        if key in embed_extra:
+            del embed_extra[key]
+
     # Use a workaround for non-OpenAI models:
-    # Set model to a valid OpenAI model name, but use the actual model in the API call
-    # by overriding the api_base and using custom headers
+    # Set model to a valid OpenAI model name to bypass enum validation,
+    # but use model_name parameter to specify the actual model for API calls.
+    # This is the official way to use custom models with OpenAIEmbedding.
     try:
         # Try to initialize with the actual model name first
         return OpenAIEmbedding(
@@ -62,26 +69,29 @@ def initialize_embed_model(
             max_retries=max_retries,
             **embed_extra,
         )
-    except ValueError as e:
-        if "not a valid OpenAIEmbeddingModelType" in str(e):
-            # If the model name is not recognized, use a workaround:
-            # Use a valid model name but the actual model will be used by the API
+    except (ValueError, TypeError) as e:
+        error_msg = str(e)
+        if "not a valid OpenAIEmbeddingModelType" in error_msg or "not a valid OpenAI model" in error_msg:
+            # If the model name is not recognized, use the model_name parameter workaround:
+            # - model: A valid OpenAI model name to pass enum validation
+            # - model_name: The actual model name to use in API requests (overrides model)
             import warnings
+
             warnings.warn(
                 f"Model '{embed_model}' is not in OpenAI's list. "
-                f"Using workaround with 'text-embedding-3-small' as model name. "
-                f"The actual model '{embed_model}' will be used by the API endpoint."
+                f"Using workaround with model_name parameter to specify custom model."
             )
-            # Don't pass model in additional_kwargs - it will use the api_base endpoint's default
             return OpenAIEmbedding(
-                model="text-embedding-3-small",  # Use a valid model name to bypass validation
+                model="text-embedding-3-small",  # Valid model name to pass enum validation
                 api_base=embed_endpoint,
                 api_key=embed_api_key,
                 dimensions=dimensions,
                 max_retries=max_retries,
+                model_name=embed_model,  # Official parameter to override the actual model used
                 **embed_extra,
             )
         else:
+            # Re-raise if it's a different error
             raise
 
 
@@ -132,18 +142,31 @@ def initialize_llm_model(
         ```
 
     """
+    from libs.logger import logger
+
     # Extract context_window if provided, default to 32k for unknown models
     context_window = llm_extra.pop("context_window", 32768)
 
-    # Use OpenAILike which is designed for OpenAI-compatible APIs
-    # This automatically handles model validation and works with any
-    # service implementing the OpenAI protocol
-    return OpenAILike(
-        model=llm_model,
-        api_base=llm_endpoint,
-        api_key=llm_api_key,
-        context_window=context_window,
-        is_chat_model=True,  # Most modern LLMs are chat models
-        **llm_extra,
-    )
+    # Remove any conflicting keys that might be in llm_extra
+    conflicting_keys = ["model", "model_name", "api_base", "api_key", "base_url", "context_window"]
+    for key in conflicting_keys:
+        if key in llm_extra:
+            logger.warning(f"Removing conflicting key '{key}' from llm_extra")
+            del llm_extra[key]
+
+    try:
+        # Use OpenAILike which is designed for OpenAI-compatible APIs
+        # This automatically handles model validation and works with any
+        # service implementing the OpenAI protocol
+        return OpenAILike(
+            model=llm_model,
+            api_base=llm_endpoint,
+            api_key=llm_api_key,
+            context_window=context_window,
+            is_chat_model=True,  # Most modern LLMs are chat models
+            **llm_extra,
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize OpenAILike model: {e}", exc_info=True)
+        raise
 
